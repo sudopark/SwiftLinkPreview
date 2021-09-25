@@ -111,47 +111,86 @@ open class SwiftLinkPreview: NSObject {
         }
 
         if let url = self.extractURL(text: text) {
-            workQueue.async {
-                if cancellable.isCancelled {return}
-
-                if let result = self.cache.slp_getCachedResponse(url: url.absoluteString) {
-                    successResponseQueue(result)
-                } else {
-
-                    self.unshortenURL(url, cancellable: cancellable, completion: { unshortened in
-                        if let result = self.cache.slp_getCachedResponse(url: unshortened.absoluteString) {
-                            successResponseQueue(result)
-                        } else {
-                            
-                            var result = Response()
-                            result.url = url
-                            result.finalUrl = self.extractInURLRedirectionIfNeeded(unshortened)
-                            result.canonicalUrl = self.extractCanonicalURL(unshortened)
-
-                            self.extractInfo(response: result, cancellable: cancellable, completion: {
-
-                                result.title = $0.title
-                                result.description = $0.description
-                                result.image = $0.image
-                                result.images = $0.images
-                                result.icon = $0.icon
-                                result.video = $0.video
-                                result.price = $0.price
-
-                                self.cache.slp_setCachedResponse(url: unshortened.absoluteString, response: result)
-                                self.cache.slp_setCachedResponse(url: url.absoluteString, response: result)
-
-                                successResponseQueue(result)
-                            }, onError: errorResponseQueue)
-                        }
-                    }, onError: errorResponseQueue)
-                }
-            }
+            self.loadPreview(url, cancellable: cancellable, successResponseQueue: successResponseQueue, errorResponseQueue: errorResponseQueue)
         } else {
             onError(.noURLHasBeenFound(text))
         }
 
         return cancellable
+    }
+    
+    public func preview(url: URL, onSuccess: @escaping (Response) -> Void, onError: @escaping (PreviewError) -> Void) -> Cancellable {
+        
+        let cancellable = Cancellable()
+
+        self.session = URLSession(configuration: self.session.configuration,
+                                  delegate: self, // To handle redirects
+            delegateQueue: self.session.delegateQueue)
+
+        let successResponseQueue = { (response: Response) in
+            if !cancellable.isCancelled {
+                self.responseQueue.async {
+                    if !cancellable.isCancelled {
+                        onSuccess(response)
+                    }
+                }
+            }
+        }
+
+        let errorResponseQueue = { (error: PreviewError) in
+            if !cancellable.isCancelled {
+                self.responseQueue.async {
+                    if !cancellable.isCancelled {
+                        onError(error)
+                    }
+                }
+            }
+        }
+        
+        self.loadPreview(url, cancellable: cancellable, successResponseQueue: successResponseQueue, errorResponseQueue: errorResponseQueue)
+        
+        return cancellable
+    }
+    
+    private func loadPreview(_ url: URL, cancellable: Cancellable,
+                             successResponseQueue: @escaping (Response) -> Void,
+                             errorResponseQueue: @escaping (PreviewError) -> Void) {
+        workQueue.async {
+            if cancellable.isCancelled {return}
+
+            if let result = self.cache.slp_getCachedResponse(url: url.absoluteString) {
+                successResponseQueue(result)
+            } else {
+
+                self.unshortenURL(url, cancellable: cancellable, completion: { unshortened in
+                    if let result = self.cache.slp_getCachedResponse(url: unshortened.absoluteString) {
+                        successResponseQueue(result)
+                    } else {
+                        
+                        var result = Response()
+                        result.url = url
+                        result.finalUrl = self.extractInURLRedirectionIfNeeded(unshortened)
+                        result.canonicalUrl = self.extractCanonicalURL(unshortened)
+
+                        self.extractInfo(response: result, cancellable: cancellable, completion: {
+
+                            result.title = $0.title
+                            result.description = $0.description
+                            result.image = $0.image
+                            result.images = $0.images
+                            result.icon = $0.icon
+                            result.video = $0.video
+                            result.price = $0.price
+
+                            self.cache.slp_setCachedResponse(url: unshortened.absoluteString, response: result)
+                            self.cache.slp_setCachedResponse(url: url.absoluteString, response: result)
+
+                            successResponseQueue(result)
+                        }, onError: errorResponseQueue)
+                    }
+                }, onError: errorResponseQueue)
+            }
+        }
     }
 
     /*
